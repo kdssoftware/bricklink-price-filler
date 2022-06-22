@@ -15,11 +15,13 @@ const Home: NextPage = () => {
     id: number;
     updateSuccess:0|1|-1|2; // 0 -> not done, 1 -> done and success, -1 -> done and no success, 2 -> skipped, because it was in success_inventory_ids
    }
-  const [cookie, setCookie] = useCookies(["bl_secrets","secretsReady","success_inventory_ids"])
+  const [cookie, setCookie] = useCookies(["bl_secrets","secretsReady"])
+  const [calls,setCalls] = useState<number>(0)
   const [items,setItems] = useState<Item[]>([])
   const [secretsReady,setSecretsReady]= useState(false)
   const [ranOnce,setRanOnce] = useState(false)
   const [fetchType,setFetchType] = useState<string>("NEW_PARTS")
+  const [SID,setSID] = useState<number[]>([])
   const [showSecrets,setShowSecrets] = useState(false)
   const [loading,setLoading] = useState(false)
   const [totalItems,setTotalItems] = useState(0)
@@ -46,13 +48,6 @@ const Home: NextPage = () => {
         maxAge: 36000000,
         sameSite: true,
       })
-      if(!cookie.success_inventory_ids){
-        setCookie("success_inventory_ids", JSON.stringify({SID:[]}), {
-          path: "/",
-          maxAge: 36000000,
-          sameSite: true,
-        })
-      }
       if(
         !ranOnce &&
         secret.CONSUMER_KEY!=="" && secret.CONSUMER_SECRET!=="" && secret.TOKEN_SECRET!== "" && secret.TOKEN_VALUE !== ""){
@@ -61,42 +56,52 @@ const Home: NextPage = () => {
           axios.post("/api/bl",{
             link:"https://api.bricklink.com/api/store/v1/colors",
             method:"GET"
-          }).then((res)=>{
-            setCookie("secretsReady", true, {
+          }).then(async (res)=>{
+            await setCalls(calls+1)
+            await setCookie("secretsReady", true, {
               path: "/",
               maxAge: 36000000,
               sameSite: true,
             })
-            setSecretsReady(true)
-            setLoading(false)
-          }).catch( (res) =>{
-            setLoading(false)
-            setCookie("secretsReady", false, {
+            await setSecretsReady(true)
+              axios.get("/api/sid?customer_key="+secret.CONSUMER_KEY).then((res)=>{
+                let SID :number[] = res.data
+                setSID(SID);
+              })
+              await setLoading(false)
+          }).catch( async (res) =>{
+            await setCalls(calls+1)
+            await setLoading(false)
+            await setCookie("secretsReady", false, {
               path: "/",
               maxAge: 36000000,
               sameSite: true,
             })
-            setSecretsReady(false)
+            await setSecretsReady(false)
           })
       }
     }
-  },[ ranOnce, secret, secretsReady, setCookie])
+  },[calls, ranOnce, secret, secretsReady, setCookie])
 
   const updatePrices = async () => {
     setLoading(true)
-    let SID : number[] = cookie.success_inventory_ids.SID 
+    let totalToProcess = 0
+    let SIDtemp : number[] = []
+    let currentCalls = calls
     for await (const item of items){
       if(item.updateSuccess === -1 || item.updateSuccess === 0 ){
         await axios.post("/api/bl",{
           link:`https://api.bricklink.com/api/store/v1/inventories/${item.id}`,
           method:"PUT",
           body:{
-            unit_price:item.price_new
+            unit_price:item.price_new.toFixed(2)
           }
-        }).then(async (res)=>{
-          let idOfItem = SID.indexOf(item.id)
-          if( idOfItem == -1){
-            SID = [...SID,item.id]
+        }).then( (res)=>{
+          currentCalls++
+          setCalls(currentCalls)
+          let idNotFound = SID.filter(s=>s===item.id).length===0
+          if( idNotFound){
+            SID.push(item.id)
           }
           setItems([
             ...items.map(_item => {
@@ -106,8 +111,10 @@ const Home: NextPage = () => {
               return _item
             })
           ])
-        }).catch(async (err)=>{
-          setItems([
+        }).catch( (err)=>{
+          currentCalls++
+          setCalls(currentCalls)
+           setItems([
             ...items.map(_item => {
               if(_item.id === item.id){
                 _item.updateSuccess = -1;
@@ -117,23 +124,30 @@ const Home: NextPage = () => {
           ])
         })
       }else{
-        let idOfItem = SID.indexOf(item.id)
-        if( idOfItem == -1){
-          SID = [...SID,item.id]
-        }
+        let idNotFound = SID.filter(s=>s===item.id).length===0
+        if( idNotFound){
+          SIDtemp.push(item.id)
+        } 
       }
+      totalToProcess++
     }
-    await setCookie("success_inventory_ids", {SID}, {
-      path: "/",
-      maxAge: 36000000,
-      sameSite: true,
-    })
-    setStarted(false)
-    setTotalItems(0)
-    setLoading(false)
+    if(secret?.CONSUMER_KEY){
+      axios.put("/api/sid?customer_key="+secret.CONSUMER_KEY,{SID:[
+        ...SID,
+        ...SIDtemp
+      ]})
+    }
+    await setSID(SIDtemp)
+    await setStarted(false)
+    await setTotalItems(0)
+    await setLoading(false)
+    await setItems([])
+    setCalls(currentCalls)
+
   }
 
   const fetchitems = () => {
+    let currentCalls = calls
     if(secret && secretsReady){
       setShowSecrets(false)
       setStarted(true)
@@ -143,68 +157,62 @@ const Home: NextPage = () => {
         link:"https://api.bricklink.com/api/store/v1/inventories?item_type=PART",
         method:"GET"
       }).then(async (res)=>{
+        currentCalls++
+        setCalls(currentCalls)
         setLoading(false)
         let parts = res.data.data as Part[]
+        parts = parts.filter(p=>SID.indexOf(p.inventory_id)===-1)
         let amountOfItemsgotten = 0
-        let SID : number[] = cookie.success_inventory_ids.SID 
         if(fetchType==="NEW_PARTS"){
           let parts_filtered = await parts.filter(part=> part.new_or_used==="N").filter(p => {
-            let idOfItem = SID.indexOf(p.inventory_id)
-            console.log(idOfItem===-1)
-            return idOfItem === -1
+            return SID.filter(s=>s===p.inventory_id).length===0
           })
-          console.log(parts_filtered)
           if(parts_filtered.length==0){
-            //filter again
-            setCookie("success_inventory_ids", {SID:[]}, {
-              path: "/",
-              maxAge: 36000000,
-              sameSite: true,
-            })
+            axios.put("/api/sid?customer_key="+secret.CONSUMER_KEY,{SID:[]})
             parts_filtered = await parts.filter(part=> part.new_or_used==="N")
           }
 
           let amountOfItemsToProcess = parts_filtered.length > amountToUpdate??1 ? amountToUpdate??1 : parts_filtered.length
           setTotalItems(Number(amountOfItemsToProcess))
-
-          for (const part of parts_filtered){
+          for await (const part of parts_filtered){
             if(amountOfItemsgotten >= amountOfItemsToProcess){
               break;
             }
             await axios.post("/api/bl",{
-              link:`https://api.bricklink.com/api/store/v1/items/part/${part.item.no}/price?guide_type=sold&new_or_used=${part.new_or_used}`,
+              link:`https://api.bricklink.com/api/store/v1/items/part/${part.item.no}/price?guide_type=sold&new_or_used=${part.new_or_used}&vat=Y&color_id=${part.color_id}`,
               method:"GET"  
             }).then(async (res)=>{
+              currentCalls++
+              setCalls(currentCalls)
+              let price_avg = (Math.round((Number(res.data.data.avg_price) + Number.EPSILON) * 100) / 100)
               let newitem : Item =  {
                 link: `https://www.bricklink.com/v2/inventory_detail.page?invID=${String(part.inventory_id)}#/pg=1&viewpg=Y`,
                 name: `${part.item.name} (${part.item.no}) (${part.color_name})`,
                 price_now: Number(part.unit_price),
-                price_avg: Number(res.data.data.avg_price),
-                price_new: (Math.round((Number(res.data.data.avg_price) + Number.EPSILON) * 100) / 100),
+                price_avg: price_avg,
+                price_new: price_avg,
                 id:part.inventory_id,
-                updateSuccess: Number(part.unit_price)===Number(res.data.data.avg_price)?1:
-                Number(res.data.data.avg_price)===0?2:0,
+                updateSuccess: (Math.round((Number(part.unit_price) + Number.EPSILON) * 100) / 100)===Number(price_avg)?2:
+                Number(price_avg)===0?2:0,
               }
+              // console.log(newitem.name,"afgerond avg prijs:",price_avg,"gekregen data: ",res.data.data.avg_price)
               if(res.data.data.avg_price){
                 setItems(items => items.concat(newitem))
               }
+            }).catch(async res=>{
+              currentCalls++
+              setCalls(currentCalls)
             })
             amountOfItemsgotten++
           }
         }else{
           let parts_filtered = await parts.filter(part=> part.new_or_used==="U").filter(p => {
-            let idOfItem = SID.indexOf(p.inventory_id)
-            console.log(idOfItem===-1)
-            return idOfItem === -1
+            return SID.filter(s=>s===p.inventory_id).length===0
           })
-          console.log(parts_filtered)
           if(parts_filtered.length==0){
             //filter again
-            setCookie("success_inventory_ids", {SID:[]}, {
-              path: "/",
-              maxAge: 36000000,
-              sameSite: true,
-            })
+            setSID([])
+            axios.put("/api/sid?customer_key="+secret.CONSUMER_KEY,{SID:[]})
             parts_filtered = await parts.filter(part=> part.new_or_used==="U")
           }
 
@@ -216,26 +224,34 @@ const Home: NextPage = () => {
               break;
             }
             await axios.post("/api/bl",{
-              link:`https://api.bricklink.com/api/store/v1/items/part/${part.item.no}/price?guide_type=sold&new_or_used=${part.new_or_used}`,
+              link:`https://api.bricklink.com/api/store/v1/items/part/${part.item.no}/price?guide_type=sold&new_or_used=${part.new_or_used}&vat=Y&color_id=${part.color_id}`,
               method:"GET"  
             }).then(async (res)=>{
+              currentCalls++
+              setCalls(currentCalls)
+              let price_avg = (Math.round((Number(res.data.data.avg_price) + Number.EPSILON) * 100) / 100)
               let newitem : Item =  {
                 link: `https://www.bricklink.com/v2/inventory_detail.page?invID=${String(part.inventory_id)}#/pg=1&viewpg=Y`,
                 name: `${part.item.name} (${part.item.no}) (${part.color_name})`,
                 price_now: Number(part.unit_price),
-                price_avg: Number(res.data.data.avg_price),
-                price_new: (Math.round((Number(res.data.data.avg_price) + Number.EPSILON) * 100) / 100),
+                price_avg: price_avg,
+                price_new: price_avg,
                 id:part.inventory_id,
-                updateSuccess: Number(part.unit_price)===Number(res.data.data.avg_price)?1:
-                Number(res.data.data.avg_price)===0?2:0,
+                updateSuccess: (Math.round((Number(part.unit_price) + Number.EPSILON) * 100) / 100)===Number(price_avg)?2:
+                Number(price_avg)===0?2:0,
               }
+              // console.log(newitem.name,"afgerond avg prijs:",price_avg,"prijs avg gekregen: ",res.data.data.avg_price)
               if(res.data.data.avg_price){
                 setItems(items => items.concat(newitem))
               }
+            }).catch((res)=>{
+              currentCalls++
+              setCalls(currentCalls)
             })
             amountOfItemsgotten++
           }
-        }
+          await setCalls(currentCalls)
+        } 
       }).catch((err)=>{
         setLoading(false)
       })
@@ -256,6 +272,11 @@ const Home: NextPage = () => {
     </svg>
   )
 
+  const globe = (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className='w-4 h-4 fill-white' >
+      <path d="M352 256C352 278.2 350.8 299.6 348.7 320H163.3C161.2 299.6 159.1 278.2 159.1 256C159.1 233.8 161.2 212.4 163.3 192H348.7C350.8 212.4 352 233.8 352 256zM503.9 192C509.2 212.5 512 233.9 512 256C512 278.1 509.2 299.5 503.9 320H380.8C382.9 299.4 384 277.1 384 256C384 234 382.9 212.6 380.8 192H503.9zM493.4 160H376.7C366.7 96.14 346.9 42.62 321.4 8.442C399.8 29.09 463.4 85.94 493.4 160zM344.3 160H167.7C173.8 123.6 183.2 91.38 194.7 65.35C205.2 41.74 216.9 24.61 228.2 13.81C239.4 3.178 248.7 0 256 0C263.3 0 272.6 3.178 283.8 13.81C295.1 24.61 306.8 41.74 317.3 65.35C328.8 91.38 338.2 123.6 344.3 160H344.3zM18.61 160C48.59 85.94 112.2 29.09 190.6 8.442C165.1 42.62 145.3 96.14 135.3 160H18.61zM131.2 192C129.1 212.6 127.1 234 127.1 256C127.1 277.1 129.1 299.4 131.2 320H8.065C2.8 299.5 0 278.1 0 256C0 233.9 2.8 212.5 8.065 192H131.2zM194.7 446.6C183.2 420.6 173.8 388.4 167.7 352H344.3C338.2 388.4 328.8 420.6 317.3 446.6C306.8 470.3 295.1 487.4 283.8 498.2C272.6 508.8 263.3 512 255.1 512C248.7 512 239.4 508.8 228.2 498.2C216.9 487.4 205.2 470.3 194.7 446.6H194.7zM190.6 503.6C112.2 482.9 48.59 426.1 18.61 352H135.3C145.3 415.9 165.1 469.4 190.6 503.6V503.6zM321.4 503.6C346.9 469.4 366.7 415.9 376.7 352H493.4C463.4 426.1 399.8 482.9 321.4 503.6V503.6z"/>
+      </svg>
+  )
   const play = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512" className='w-6 h-6 fill-sky-600'>
       <path d="M361 215C375.3 223.8 384 239.3 384 256C384 272.7 375.3 288.2 361 296.1L73.03 472.1C58.21 482 39.66 482.4 24.52 473.9C9.377 465.4 0 449.4 0 432V80C0 62.64 9.377 46.63 24.52 38.13C39.66 29.64 58.21 29.99 73.03 39.04L361 215z"/>
@@ -276,6 +297,9 @@ const Home: NextPage = () => {
   )
   return (
     <div className='bg-sky-200 w-screen h-full min-h-screen p-8'>
+      <Head>
+        <link rel="shortcut icon" href="/logo.png" type="image/x-icon" />
+      </Head>
       <div className='relative w-full mb-4 h-20 bg-sky-100 flex justify-center items-center text-sky-900 font-bold'>
       {
         loading &&
@@ -287,9 +311,19 @@ const Home: NextPage = () => {
                 }
           </button>
         }
+        <div className='absolute left-60 py-1 flex flex-col hover:scale-105 cursor-pointer'>
+        <a href="https://www.fyrebrick.nl/en/">
+            <div className='flex justify-center'>
+              <img src="/logo.png" alt="" className='w-28' />
+            </div>
+            <div className='text-red-800'>Developed by Fyrebrick</div>
+        </a>
+        </div>
+
         <div>
           <span>Zoek </span>
         </div>
+
         <div>
         <input onChange={(e)=>{
           let a = Number(e.target.value)
@@ -304,14 +338,14 @@ const Home: NextPage = () => {
           }
         }} 
         value={amountToUpdate}
-        className='p-2 border-2 border-gray-400 rounded-lg m-2 bg-sky-100 ' min={1} max={2480} type={"number"} id=""/>
+        className='p-2 border-2 border-gray-400 rounded-lg m-2 bg-sky-100 ' min={1} max={2480} type={"number"} id="" disabled={started}/>
         </div>
         <div>
           <span> items  van </span>
         </div>
         <select  onChange={(e)=>{
           setFetchType(e.target.value)
-        }} className='p-2 border-2 border-gray-400 rounded-lg m-2 bg-sky-100 ' name="" id="">
+        }} className='p-2 border-2 border-gray-400 rounded-lg m-2 bg-sky-100 ' name="" id="" disabled={started}>
           <option value="NEW_PARTS">New Parts</option>
           <option value="OLD_PARTS">Old Parts</option>
         </select>
@@ -340,7 +374,7 @@ const Home: NextPage = () => {
             }
       </button>
       </div>
-      <div className={`w-full bg-sky-100 flex justify-around transition-all h-28 ${secretsReady?"bg-sky-100":"bg-red-100"}`}  style={{display:showSecrets?"flex":"none"}}>
+      <div className={`w-full mb-3 bg-sky-100 flex justify-around transition-all h-28 ${secretsReady?"bg-sky-100":"bg-red-100"}`}  style={{display:showSecrets?"flex":"none"}}>
         <label htmlFor="ConsumerKey" className='font-lg mx-4 w-full flex flex-col justify-center items-center'>
           <span className='pb-2 font-bold text-lg'>Consumer key</span>
           <input 
@@ -406,13 +440,22 @@ const Home: NextPage = () => {
           id="TokenSecret" type="text" />
         </label>
       </div>
-      <div className='pb-3 font-bold text-lg px-1'>
+      <div className='w-full flex flex-row justify-between pb-3'>
+      <div className='relative font-bold text-lg px-1'>
         {
-          items && totalItems != 0 &&
+          items && totalItems != 0 ?
           (
             <span>{items.length}/{totalItems} items geladen.</span>
-          )
+          ):(<span>  </span>)
         }
+      </div>
+      <div 
+        onClick={()=>{
+          setCalls(0)
+        }}
+        className='text-white bg-sky-400 w-24 h-8 rounded-sm hover:bg-red-800 cursor-pointer transition-all flex justify-around items-center'>
+        {calls??0} {globe}
+      </div>
       </div>
       <div>
         <table className='bg-sky-50 w-full text-left '>
@@ -435,8 +478,8 @@ const Home: NextPage = () => {
             `} key={id}>
               <td className='px-4 border-x-2 py-0.5 text-sky-800 underline hover:text-sky-600'> <a target="_blank" href={item.link} rel="noreferrer">{item.name}</a></td>
               <td className='px-4 border-x-2 py-0.5'>{item.price_now}</td>
-              <td className='px-4 border-x-2 py-0.5'>{item.price_avg}</td>
-              <td className='px-4 border-x-2 py-0.5'>{item.price_new}</td>
+              <td className='px-4 border-x-2 py-0.5'>{item.price_avg.toFixed(2)}</td>
+              <td className='px-4 border-x-2 py-0.5'>{item.price_new.toFixed(2)}</td>
             </tr>)
           }
          </tbody>
