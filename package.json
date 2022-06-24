@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "gclpush": "docker build -t europe-west1-docker.pkg.dev/bricklink-price-filler/main/nextjs --platform  linux/amd64 . && docker push europe-west1-docker.pkg.dev/bricklink-price-filler/main/nextjs"
   },
   "dependencies": {
     "@google-cloud/datastore": "^7.0.0",

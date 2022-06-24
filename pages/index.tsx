@@ -1,11 +1,20 @@
 import type { NextPage } from 'next'
 import Head from 'next/head'
-import Image from 'next/image'
 import { useEffect, useState } from 'react'
 import axios from "axios"
 import { useCookies } from "react-cookie"
 
 const Home: NextPage = () => {
+  enum STATUS {
+    ERROR = -1,
+    NOT_PROCESSED = 0,
+    SUCCESS = 1,
+    SKIP_EQUAL = 2,
+    SKIP_ZERO = 3,
+    SKIP_MANUAL = 4,
+    RETRY =5,
+  }
+
   type Item = {
     link : string;
     name: string;
@@ -13,19 +22,20 @@ const Home: NextPage = () => {
     price_avg : number;
     price_new : number; 
     id: number;
-    updateSuccess:0|1|-1|2; // 0 -> not done, 1 -> done and success, -1 -> done and no success, 2 -> skipped, because it was in success_inventory_ids
+    updateSuccess: STATUS; 
    }
-  const [cookie, setCookie] = useCookies(["bl_secrets","secretsReady"])
-  const [calls,setCalls] = useState<number>(0)
+  const [cookie, setCookie] = useCookies(["bl_secrets","secretsReady","calls"])
+  const [calls,setCalls] = useState<number|null>(null)
   const [items,setItems] = useState<Item[]>([])
   const [secretsReady,setSecretsReady]= useState(false)
   const [ranOnce,setRanOnce] = useState(false)
   const [fetchType,setFetchType] = useState<string>("NEW_PARTS")
   const [SID,setSID] = useState<number[]>([])
+  const [showRetry, setRetry] = useState(false)
   const [showSecrets,setShowSecrets] = useState(false)
   const [loading,setLoading] = useState(false)
   const [totalItems,setTotalItems] = useState(0)
-  const [amountToUpdate,setAmountToUpdate] = useState<number|"">(500)
+  const [amountToUpdate,setAmountToUpdate] = useState<number|"">(50)
   const [started,setStarted] = useState(false)
   const [secret,setSecret] = useState<{
     TOKEN_VALUE? : string;
@@ -40,7 +50,9 @@ const Home: NextPage = () => {
       setSecret(obj)
     }catch(e){console.trace(e)}
   }
-  
+
+
+
   useEffect(() => {
     if(secret){
       setCookie("bl_secrets", JSON.stringify(secret), {
@@ -57,7 +69,7 @@ const Home: NextPage = () => {
             link:"https://api.bricklink.com/api/store/v1/colors",
             method:"GET"
           }).then(async (res)=>{
-            await setCalls(calls+1)
+            await setCalls(calls??0+1)
             await setCookie("secretsReady", true, {
               path: "/",
               maxAge: 36000000,
@@ -70,7 +82,7 @@ const Home: NextPage = () => {
               })
               await setLoading(false)
           }).catch( async (res) =>{
-            await setCalls(calls+1)
+            await setCalls(calls??0+1)
             await setLoading(false)
             await setCookie("secretsReady", false, {
               path: "/",
@@ -84,12 +96,15 @@ const Home: NextPage = () => {
   },[calls, ranOnce, secret, secretsReady, setCookie])
 
   const updatePrices = async () => {
+    if(!calls){return}
     setLoading(true)
-    let totalToProcess = 0
     let SIDtemp : number[] = []
     let currentCalls = calls
+    let i = 0
+    //add all successes and skips + manual skips to SID
     for await (const item of items){
-      if(item.updateSuccess === -1 || item.updateSuccess === 0 ){
+      // only process the not processed ones
+      if(item.updateSuccess === STATUS.NOT_PROCESSED || item.updateSuccess === STATUS.RETRY ){
         await axios.post("/api/bl",{
           link:`https://api.bricklink.com/api/store/v1/inventories/${item.id}`,
           method:"PUT",
@@ -106,7 +121,7 @@ const Home: NextPage = () => {
           setItems([
             ...items.map(_item => {
               if(_item.id === item.id){
-                _item.updateSuccess = 1;
+                _item.updateSuccess = STATUS.SUCCESS;
               }
               return _item
             })
@@ -117,7 +132,7 @@ const Home: NextPage = () => {
            setItems([
             ...items.map(_item => {
               if(_item.id === item.id){
-                _item.updateSuccess = -1;
+                _item.updateSuccess = STATUS.ERROR;
               }
               return _item
             })
@@ -129,24 +144,33 @@ const Home: NextPage = () => {
           SIDtemp.push(item.id)
         } 
       }
-      totalToProcess++
     }
     if(secret?.CONSUMER_KEY){
-      axios.put("/api/sid?customer_key="+secret.CONSUMER_KEY,{SID:[
-        ...SID,
-        ...SIDtemp
-      ]})
+      axios.get("/api/sid?customer_key="+secret.CONSUMER_KEY).then((res)=>{
+        let latestSID :number[] = res.data
+        setSID(latestSID);
+        axios.put("/api/sid?customer_key="+secret.CONSUMER_KEY,{SID:[
+          ...SID,
+          ...SIDtemp
+        ]})
+      })
     }
-    await setSID(SIDtemp)
+    setCalls(currentCalls)
+    setRetry(true)
+    setLoading(false)
+  }
+
+
+  const retry = async () => {
     await setStarted(false)
     await setTotalItems(0)
     await setLoading(false)
-    await setItems([])
-    setCalls(currentCalls)
-
+    await setItems(items.filter(item => item.updateSuccess === STATUS.RETRY))
+    await setRetry(false)
   }
 
   const fetchitems = () => {
+    if(!calls){return}
     let currentCalls = calls
     if(secret && secretsReady){
       setShowSecrets(false)
@@ -162,19 +186,28 @@ const Home: NextPage = () => {
         setLoading(false)
         let parts = res.data.data as Part[]
         parts = parts.filter(p=>SID.indexOf(p.inventory_id)===-1)
-        let amountOfItemsgotten = 0
+        let amountOfItemsgotten = items.filter(item => item.updateSuccess === STATUS.RETRY).length
         if(fetchType==="NEW_PARTS"){
           let parts_filtered = await parts.filter(part=> part.new_or_used==="N").filter(p => {
             return SID.filter(s=>s===p.inventory_id).length===0
           })
-          if(parts_filtered.length==0){
+          if(parts_filtered.length==0 || SID.length >= res.data.data?.length){
             axios.put("/api/sid?customer_key="+secret.CONSUMER_KEY,{SID:[]})
-            parts_filtered = await parts.filter(part=> part.new_or_used==="N")
+            setSID([])
+            fetchitems()
           }
 
           let amountOfItemsToProcess = parts_filtered.length > amountToUpdate??1 ? amountToUpdate??1 : parts_filtered.length
           setTotalItems(Number(amountOfItemsToProcess))
           for await (const part of parts_filtered){
+            let partIDs = parts.map(p=>p.inventory_id)
+            let partAlreadyInItem = items.filter(_item=>{
+              return partIDs.indexOf(_item.id)!==-1
+            }).length > 0
+            if(partAlreadyInItem ){
+              console.log("skip")
+              continue;
+            }
             if(amountOfItemsgotten >= amountOfItemsToProcess){
               break;
             }
@@ -184,16 +217,16 @@ const Home: NextPage = () => {
             }).then(async (res)=>{
               currentCalls++
               setCalls(currentCalls)
-              let price_avg = (Math.round((Number(res.data.data.avg_price) + Number.EPSILON) * 100) / 100)
+              let price_avg_rounded = (Math.floor((Number(res.data.data.avg_price.toFixed(2)) + Number.EPSILON) * 100) / 100)
               let newitem : Item =  {
                 link: `https://www.bricklink.com/v2/inventory_detail.page?invID=${String(part.inventory_id)}#/pg=1&viewpg=Y`,
                 name: `${part.item.name} (${part.item.no}) (${part.color_name})`,
                 price_now: Number(part.unit_price),
-                price_avg: price_avg,
-                price_new: price_avg,
+                price_avg: Number(res.data.data.avg_price),
+                price_new: price_avg_rounded,
                 id:part.inventory_id,
-                updateSuccess: (Math.round((Number(part.unit_price) + Number.EPSILON) * 100) / 100)===Number(price_avg)?2:
-                Number(price_avg)===0?2:0,
+                updateSuccess: (Math.floor((Number(part.unit_price) + Number.EPSILON) * 100) / 100)===Number(price_avg_rounded)?STATUS.SKIP_EQUAL:
+                Number(price_avg_rounded)===0?STATUS.SKIP_ZERO:STATUS.NOT_PROCESSED,
               }
               // console.log(newitem.name,"afgerond avg prijs:",price_avg,"gekregen data: ",res.data.data.avg_price)
               if(res.data.data.avg_price){
@@ -209,11 +242,10 @@ const Home: NextPage = () => {
           let parts_filtered = await parts.filter(part=> part.new_or_used==="U").filter(p => {
             return SID.filter(s=>s===p.inventory_id).length===0
           })
-          if(parts_filtered.length==0){
-            //filter again
-            setSID([])
+          if(parts_filtered.length==0 || SID.length >= res.data.data?.length){
             axios.put("/api/sid?customer_key="+secret.CONSUMER_KEY,{SID:[]})
-            parts_filtered = await parts.filter(part=> part.new_or_used==="U")
+            setSID([])
+            fetchitems()
           }
 
           let amountOfItemsToProcess = parts_filtered.length > amountToUpdate??1 ? amountToUpdate??1 : parts_filtered.length
@@ -229,16 +261,16 @@ const Home: NextPage = () => {
             }).then(async (res)=>{
               currentCalls++
               setCalls(currentCalls)
-              let price_avg = (Math.round((Number(res.data.data.avg_price) + Number.EPSILON) * 100) / 100)
+              let price_avg_rounded = (Math.floor((Number(res.data.data.avg_price.toFixed(2)) + Number.EPSILON) * 100) / 100)
               let newitem : Item =  {
                 link: `https://www.bricklink.com/v2/inventory_detail.page?invID=${String(part.inventory_id)}#/pg=1&viewpg=Y`,
                 name: `${part.item.name} (${part.item.no}) (${part.color_name})`,
                 price_now: Number(part.unit_price),
-                price_avg: price_avg,
-                price_new: price_avg,
+                price_avg: Number(res.data.data.avg_price),
+                price_new: price_avg_rounded,
                 id:part.inventory_id,
-                updateSuccess: (Math.round((Number(part.unit_price) + Number.EPSILON) * 100) / 100)===Number(price_avg)?2:
-                Number(price_avg)===0?2:0,
+                updateSuccess: (Math.floor((Number(part.unit_price) + Number.EPSILON) * 100) / 100)===Number(price_avg_rounded)?STATUS.SKIP_EQUAL:
+                Number(price_avg_rounded)===0?STATUS.SKIP_ZERO:STATUS.NOT_PROCESSED,
               }
               // console.log(newitem.name,"afgerond avg prijs:",price_avg,"prijs avg gekregen: ",res.data.data.avg_price)
               if(res.data.data.avg_price){
@@ -286,6 +318,9 @@ const Home: NextPage = () => {
   const check = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512" className='w-6 h-6 fill-green-600'><path d="M438.6 105.4C451.1 117.9 451.1 138.1 438.6 150.6L182.6 406.6C170.1 419.1 149.9 419.1 137.4 406.6L9.372 278.6C-3.124 266.1-3.124 245.9 9.372 233.4C21.87 220.9 42.13 220.9 54.63 233.4L159.1 338.7L393.4 105.4C405.9 92.88 426.1 92.88 438.6 105.4H438.6z"/></svg>
   )
+  const checkWhite = (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512" className='w-6 h-6 fill-white'><path d="M438.6 105.4C451.1 117.9 451.1 138.1 438.6 150.6L182.6 406.6C170.1 419.1 149.9 419.1 137.4 406.6L9.372 278.6C-3.124 266.1-3.124 245.9 9.372 233.4C21.87 220.9 42.13 220.9 54.63 233.4L159.1 338.7L393.4 105.4C405.9 92.88 426.1 92.88 438.6 105.4H438.6z"/></svg>
+  )
 
   const cog = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className='w-6 h-6 fill-sky-700 hover:sky-900'>
@@ -293,8 +328,96 @@ const Home: NextPage = () => {
   )
   
   const xmark = (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" className='w-6 h-6 fill-red-600' ><path d="M310.6 361.4c12.5 12.5 12.5 32.75 0 45.25C304.4 412.9 296.2 416 288 416s-16.38-3.125-22.62-9.375L160 301.3L54.63 406.6C48.38 412.9 40.19 416 32 416S15.63 412.9 9.375 406.6c-12.5-12.5-12.5-32.75 0-45.25l105.4-105.4L9.375 150.6c-12.5-12.5-12.5-32.75 0-45.25s32.75-12.5 45.25 0L160 210.8l105.4-105.4c12.5-12.5 32.75-12.5 45.25 0s12.5 32.75 0 45.25l-105.4 105.4L310.6 361.4z"/></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" className='w-6 h-6 fill-white' ><path d="M310.6 361.4c12.5 12.5 12.5 32.75 0 45.25C304.4 412.9 296.2 416 288 416s-16.38-3.125-22.62-9.375L160 301.3L54.63 406.6C48.38 412.9 40.19 416 32 416S15.63 412.9 9.375 406.6c-12.5-12.5-12.5-32.75 0-45.25l105.4-105.4L9.375 150.6c-12.5-12.5-12.5-32.75 0-45.25s32.75-12.5 45.25 0L160 210.8l105.4-105.4c12.5-12.5 32.75-12.5 45.25 0s12.5 32.75 0 45.25l-105.4 105.4L310.6 361.4z"/></svg>
   )
+  const skip = (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className='w-6 h-6 fill-white'>
+      <path d="M52.51 440.6l171.5-142.9V214.3L52.51 71.41C31.88 54.28 0 68.66 0 96.03v319.9C0 443.3 31.88 457.7 52.51 440.6zM308.5 440.6l192-159.1c15.25-12.87 15.25-36.37 0-49.24l-192-159.1c-20.63-17.12-52.51-2.749-52.51 24.62v319.9C256 443.3 287.9 457.7 308.5 440.6z"/>
+    </svg>
+  )
+
+  const equal = (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512" className='w-6 h-6 fill-white'>
+      <path d="M48 192h352c17.69 0 32-14.32 32-32s-14.31-31.1-32-31.1h-352c-17.69 0-32 14.31-32 31.1S30.31 192 48 192zM400 320h-352c-17.69 0-32 14.31-32 31.1s14.31 32 32 32h352c17.69 0 32-14.32 32-32S417.7 320 400 320z"/>
+    </svg>
+  )
+
+  const error = (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className='w-6 h-6 fill-white' >
+      <path d="M506.3 417l-213.3-364c-16.33-28-57.54-28-73.98 0l-213.2 364C-10.59 444.9 9.849 480 42.74 480h426.6C502.1 480 522.6 445 506.3 417zM232 168c0-13.25 10.75-24 24-24S280 154.8 280 168v128c0 13.25-10.75 24-23.1 24S232 309.3 232 296V168zM256 416c-17.36 0-31.44-14.08-31.44-31.44c0-17.36 14.07-31.44 31.44-31.44s31.44 14.08 31.44 31.44C287.4 401.9 273.4 416 256 416z"/>
+    </svg>
+  )
+
+  const hourglass_empty = (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512" className='w-6 h-6 fill-white'  >
+      <path d="M0 32C0 14.33 14.33 0 32 0H352C369.7 0 384 14.33 384 32C384 49.67 369.7 64 352 64V74.98C352 117.4 335.1 158.1 305.1 188.1L237.3 256L305.1 323.9C335.1 353.9 352 394.6 352 437V448C369.7 448 384 462.3 384 480C384 497.7 369.7 512 352 512H32C14.33 512 0 497.7 0 480C0 462.3 14.33 448 32 448V437C32 394.6 48.86 353.9 78.86 323.9L146.7 256L78.86 188.1C48.86 158.1 32 117.4 32 74.98V64C14.33 64 0 49.67 0 32zM96 64V74.98C96 100.4 106.1 124.9 124.1 142.9L192 210.7L259.9 142.9C277.9 124.9 288 100.4 288 74.98V64H96zM96 448H288V437C288 411.6 277.9 387.1 259.9 369.1L192 301.3L124.1 369.1C106.1 387.1 96 411.6 96 437V448z"/>
+    </svg>
+  )
+
+  const zero = (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" className='w-6 h-6 fill-white'>
+      <path d="M160 32.01c-88.37 0-160 71.63-160 160v127.1c0 88.37 71.63 160 160 160s160-71.63 160-160V192C320 103.6 248.4 32.01 160 32.01zM256 320c0 52.93-43.06 96-96 96c-52.93 0-96-43.07-96-96V192c0-52.94 43.07-96 96-96c52.94 0 96 43.06 96 96V320z"/>
+    </svg>
+  )
+
+  const refresh = (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className='w-6 h-6 fill-sky-600'>
+      <path d="M464 16c-17.67 0-32 14.31-32 32v74.09C392.1 66.52 327.4 32 256 32C161.5 32 78.59 92.34 49.58 182.2c-5.438 16.81 3.797 34.88 20.61 40.28c16.89 5.5 34.88-3.812 40.3-20.59C130.9 138.5 189.4 96 256 96c50.5 0 96.26 24.55 124.4 64H336c-17.67 0-32 14.31-32 32s14.33 32 32 32h128c17.67 0 32-14.31 32-32V48C496 30.31 481.7 16 464 16zM441.8 289.6c-16.92-5.438-34.88 3.812-40.3 20.59C381.1 373.5 322.6 416 256 416c-50.5 0-96.25-24.55-124.4-64H176c17.67 0 32-14.31 32-32s-14.33-32-32-32h-128c-17.67 0-32 14.31-32 32v144c0 17.69 14.33 32 32 32s32-14.31 32-32v-74.09C119.9 445.5 184.6 480 255.1 480c94.45 0 177.4-60.34 206.4-150.2C467.9 313 458.6 294.1 441.8 289.6z"/>\
+    </svg>
+  )
+  const refreshWhite = (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className='w-6 h-6 fill-white'>
+      <path d="M464 16c-17.67 0-32 14.31-32 32v74.09C392.1 66.52 327.4 32 256 32C161.5 32 78.59 92.34 49.58 182.2c-5.438 16.81 3.797 34.88 20.61 40.28c16.89 5.5 34.88-3.812 40.3-20.59C130.9 138.5 189.4 96 256 96c50.5 0 96.26 24.55 124.4 64H336c-17.67 0-32 14.31-32 32s14.33 32 32 32h128c17.67 0 32-14.31 32-32V48C496 30.31 481.7 16 464 16zM441.8 289.6c-16.92-5.438-34.88 3.812-40.3 20.59C381.1 373.5 322.6 416 256 416c-50.5 0-96.25-24.55-124.4-64H176c17.67 0 32-14.31 32-32s-14.33-32-32-32h-128c-17.67 0-32 14.31-32 32v144c0 17.69 14.33 32 32 32s32-14.31 32-32v-74.09C119.9 445.5 184.6 480 255.1 480c94.45 0 177.4-60.34 206.4-150.2C467.9 313 458.6 294.1 441.8 289.6z"/>\
+    </svg>
+  )
+
+  const getSVGbasedOnUpdateSuccess = (updateSuccess : STATUS,onClickCallBack? : Function) => {
+    let svg = <></>
+    let clickable = false
+    let className = ""
+    switch(updateSuccess){
+      case STATUS.ERROR :
+        svg = error
+        className = "bg-red-600 hover:bg-sky-600"
+        clickable = true
+        break;
+      case STATUS.NOT_PROCESSED : 
+        svg = hourglass_empty
+        className = "bg-sky-600 hover:bg-yellow-600"
+        clickable = true
+        break;
+      case STATUS.SKIP_EQUAL:
+        svg = equal
+        className = "bg-yellow-600"
+        break;
+      case STATUS.SKIP_ZERO:
+        svg = zero
+        className = "bg-yellow-600"
+        break;
+      case STATUS.SKIP_MANUAL:
+        svg = skip
+        className = "bg-yellow-600 hover:bg-sky-600"
+        clickable = true
+        break;
+      case STATUS.SUCCESS:
+        svg = checkWhite
+        className = "bg-green-600"
+        break;
+      case STATUS.RETRY :
+        svg = refreshWhite
+        className = "bg-sky-600 hover:bg-red-600"
+        clickable = true
+        break;
+    }
+    return <button onClick={()=>{
+      if(clickable && onClickCallBack){
+        onClickCallBack()
+      }
+    }} className={"p-2 border-2 "+(clickable?"hover:scale-105 transition-all cursor-pointer":"")+" rounded-xl "+className}>
+      {svg}
+    </button>
+  }
+
   return (
     <div className='bg-sky-200 w-screen h-full min-h-screen p-8'>
       <Head>
@@ -321,7 +444,7 @@ const Home: NextPage = () => {
         </div>
 
         <div>
-          <span>Zoek </span>
+          <span>Search </span>
         </div>
 
         <div>
@@ -341,7 +464,7 @@ const Home: NextPage = () => {
         className='p-2 border-2 border-gray-400 rounded-lg m-2 bg-sky-100 ' min={1} max={2480} type={"number"} id="" disabled={started}/>
         </div>
         <div>
-          <span> items  van </span>
+          <span> items  from </span>
         </div>
         <select  onChange={(e)=>{
           setFetchType(e.target.value)
@@ -358,7 +481,15 @@ const Home: NextPage = () => {
           </button>
       }
       {
-        started && totalItems === items.length && totalItems !== 0 &&
+        showRetry &&
+        <button onClick={()=>{
+          retry()
+        }} className='p-2 border-2 border-gray-400 rounded-lg m-2 hover:bg-sky-100 hover:scale-110 transition'>
+              {refresh}
+        </button>
+      }
+      {
+        started && totalItems === items.length && totalItems !== 0 && !showRetry && 
           <button onClick={()=>{
             updatePrices()
           }} className='p-2 border-2 border-gray-400 rounded-lg m-2 hover:bg-sky-100 hover:scale-110 transition'>
@@ -445,7 +576,7 @@ const Home: NextPage = () => {
         {
           items && totalItems != 0 ?
           (
-            <span>{items.length}/{totalItems} items geladen.</span>
+            <span>{items.length}/{totalItems} items loaded.</span>
           ):(<span>  </span>)
         }
       </div>
@@ -461,10 +592,11 @@ const Home: NextPage = () => {
         <table className='bg-sky-50 w-full text-left '>
           <thead>
           <tr>
+            <th>{" "}</th>
             <th className='px-4'>Link</th>
-            <th className='px-4'>Prijs nu</th>
-            <th className='px-4'>Prijs 6 months avg</th>
-            <th className='px-4'>Nieuwe updated prijs</th>
+            <th className='px-4'>Price nu</th>
+            <th className='px-4'>Price 6 months avg</th>
+            <th className='px-4'>New updated price</th>
           </tr>
           </thead>
          <tbody>  
@@ -472,14 +604,53 @@ const Home: NextPage = () => {
             items && items.length != 0 && 
             items.map((item,id) => 
             <tr className={`border-2 
-            ${item.updateSuccess===1&&' bg-green-500'} 
-            ${item.updateSuccess===-1&&' bg-red-500'}
-            ${item.updateSuccess===2&&' bg-amber-200'}
+            ${item.updateSuccess===STATUS.SUCCESS&&' bg-green-500'} 
+            ${item.updateSuccess===STATUS.ERROR&&' bg-red-500'}
+            ${
+              (
+              item.updateSuccess===STATUS.SKIP_EQUAL ||
+              item.updateSuccess===STATUS.SKIP_ZERO ||
+              item.updateSuccess===STATUS.SKIP_MANUAL 
+              ) &&' bg-amber-200'}
             `} key={id}>
+              <td className='pl-3 py-0.5'>
+                {getSVGbasedOnUpdateSuccess(item.updateSuccess,()=>{
+                  console.log("clickin' ",item.id," ",item.updateSuccess)
+                  if(item.updateSuccess === STATUS.NOT_PROCESSED){
+                    setItems(items.map(_item=>{
+                      if(_item.id === item.id){
+                        _item.updateSuccess = STATUS.SKIP_MANUAL
+                      }
+                      return _item
+                    }))
+                  }else if(item.updateSuccess=== STATUS.SKIP_MANUAL){
+                    setItems(items.map(_item=>{
+                      if(_item.id === item.id){
+                        _item.updateSuccess = STATUS.NOT_PROCESSED
+                      }
+                      return _item
+                    }))
+                  }else if(item.updateSuccess=== STATUS.ERROR){
+                    setItems(items.map(_item=>{
+                      if(_item.id === item.id){
+                        _item.updateSuccess = STATUS.RETRY
+                      }
+                      return _item
+                    }))
+                  }else  if(item.updateSuccess=== STATUS.RETRY){
+                    setItems(items.map(_item=>{
+                      if(_item.id === item.id){
+                        _item.updateSuccess = STATUS.ERROR
+                      }
+                      return _item
+                    }))
+                  }
+                })}
+              </td>
               <td className='px-4 border-x-2 py-0.5 text-sky-800 underline hover:text-sky-600'> <a target="_blank" href={item.link} rel="noreferrer">{item.name}</a></td>
               <td className='px-4 border-x-2 py-0.5'>{item.price_now}</td>
-              <td className='px-4 border-x-2 py-0.5'>{item.price_avg.toFixed(2)}</td>
-              <td className='px-4 border-x-2 py-0.5'>{item.price_new.toFixed(2)}</td>
+              <td className='px-4 border-x-2 py-0.5'>{item.price_avg}</td>
+              <td className='px-4 border-x-2 py-0.5'>{item.price_new}</td>
             </tr>)
           }
          </tbody>
