@@ -183,19 +183,17 @@ const Home: NextPage = () => {
       }).then(async (res)=>{
         currentCalls++
         setCalls(currentCalls)
-        setLoading(false)
         let parts = res.data.data as Part[]
+        if(res.data.data?.length && SID.length >= res.data.data?.length){
+          axios.put("/api/sid?customer_key="+secret.CONSUMER_KEY,{SID:[]})
+          await setSID([])
+        }
         parts = parts.filter(p=>SID.indexOf(p.inventory_id)===-1)
         let amountOfItemsgotten = items.filter(item => item.updateSuccess === STATUS.RETRY).length
         if(fetchType==="NEW_PARTS"){
           let parts_filtered = await parts.filter(part=> part.new_or_used==="N").filter(p => {
             return SID.filter(s=>s===p.inventory_id).length===0
           })
-          if(parts_filtered.length==0 || SID.length >= res.data.data?.length){
-            axios.put("/api/sid?customer_key="+secret.CONSUMER_KEY,{SID:[]})
-            setSID([])
-            fetchitems()
-          }
 
           let amountOfItemsToProcess = parts_filtered.length > amountToUpdate??1 ? amountToUpdate??1 : parts_filtered.length
           setTotalItems(Number(amountOfItemsToProcess))
@@ -242,11 +240,6 @@ const Home: NextPage = () => {
           let parts_filtered = await parts.filter(part=> part.new_or_used==="U").filter(p => {
             return SID.filter(s=>s===p.inventory_id).length===0
           })
-          if(parts_filtered.length==0 || SID.length >= res.data.data?.length){
-            axios.put("/api/sid?customer_key="+secret.CONSUMER_KEY,{SID:[]})
-            setSID([])
-            fetchitems()
-          }
 
           let amountOfItemsToProcess = parts_filtered.length > amountToUpdate??1 ? amountToUpdate??1 : parts_filtered.length
           setTotalItems(Number(amountOfItemsToProcess))
@@ -287,8 +280,10 @@ const Home: NextPage = () => {
       }).catch((err)=>{
         setLoading(false)
       })
+      setLoading(false)
     }else{
       setShowSecrets(true)
+      setLoading(false)
     }
   }
 
