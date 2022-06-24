@@ -51,8 +51,6 @@ const Home: NextPage = () => {
     } catch (e) { console.trace(e) }
   }
 
-
-
   useEffect(() => {
     if (secret) {
       setCookie("bl_secrets", JSON.stringify(secret), {
@@ -196,12 +194,6 @@ const Home: NextPage = () => {
       //increase calls
       currentCalls++
       setCalls(currentCalls)
-      // get parts
-      let parts = res.data.data as Part[]
-      // filter parts, only having parts that are not in SID of the user
-      parts = parts.filter(p => SID.indexOf(p.inventory_id) === -1)
-      // starting point of items, number of items to retry or 0
-      let itemsAmountStart = items.filter(item => item.status === STATUS.RETRY).length
 
       //get the U/N based on the option selectedd
       let new_or_used_filter: string
@@ -214,6 +206,10 @@ const Home: NextPage = () => {
           new_or_used_filter = "N"
       }
 
+      // get parts
+      let parts = res.data.data as Part[]
+      // filter parts, only having parts that are not in SID of the user
+      parts = parts.filter(p => SID.indexOf(p.inventory_id) === -1)
       // filter parts based on N/U
       parts = parts.filter(part => part.new_or_used === "N");
       // create a backup of parts, before filtering the SID on it
@@ -227,6 +223,8 @@ const Home: NextPage = () => {
         parts = parts_backup
       }
 
+      // starting point of items, number of items to retry or 0
+      let itemsAmountStart = items.filter(item => item.status === STATUS.RETRY).length
       // set total items to do to: or the given amount to update or the total length. Whichever is shorter
       let itemsToDo = parts.length > amountToUpdate ? amountToUpdate : parts.length
       setTotalItems(Number(itemsToDo))
@@ -284,6 +282,7 @@ const Home: NextPage = () => {
       // request failed to get inventory data
       setLoading(false)
     })
+    setLoading(false)
   }
 
   const circle_notch = (
