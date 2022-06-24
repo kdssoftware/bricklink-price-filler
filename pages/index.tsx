@@ -13,6 +13,7 @@ const Home: NextPage = () => {
     SKIP_ZERO = 3,
     SKIP_MANUAL = 4,
     RETRY = 5,
+    EDITED = 6,
   }
 
   type Item = {
@@ -20,9 +21,11 @@ const Home: NextPage = () => {
     name: string;
     price_now: number;
     price_avg: number;
-    price_new: number;
+    price_new: string;
+    price_new_initial: number;
     id: number;
     status: STATUS;
+    status_initial: STATUS;
   }
   const [cookie, setCookie] = useCookies(["bl_secrets", "secretsReady", "calls"])
   const [calls, setCalls] = useState<number | null>(null)
@@ -102,12 +105,12 @@ const Home: NextPage = () => {
     //add all successes and skips + manual skips to SID
     for await (const item of items) {
       // only process the not processed ones
-      if (item.status === STATUS.NOT_PROCESSED || item.status === STATUS.RETRY) {
+      if (item.status === STATUS.NOT_PROCESSED || item.status === STATUS.RETRY || item.status === STATUS.EDITED) {
         await axios.post("/api/bl", {
           link: `https://api.bricklink.com/api/store/v1/inventories/${item.id}`,
           method: "PUT",
           body: {
-            unit_price: item.price_new.toFixed(2)
+            unit_price: Number(item.price_new).toFixed(2)
           }
         }).then((res) => {
           currentCalls++
@@ -211,7 +214,7 @@ const Home: NextPage = () => {
       // filter parts, only having parts that are not in SID of the user
       parts = parts.filter(p => SID.indexOf(p.inventory_id) === -1)
       // filter parts based on N/U
-      parts = parts.filter(part => part.new_or_used === "N");
+      parts = parts.filter(part => part.new_or_used === new_or_used_filter);
       // create a backup of parts, before filtering the SID on it
       let parts_backup = parts
       // filter parts based on available SID
@@ -254,17 +257,19 @@ const Home: NextPage = () => {
 
           // only add the item when avg_price is set
           if (res.data.data.avg_price) {
-
+            let status = roundNumber(part.unit_price) === roundNumber(res.data.data.avg_price) ? STATUS.SKIP_EQUAL :
+            roundNumber(res.data.data.avg_price) === 0 ? STATUS.SKIP_ZERO : STATUS.NOT_PROCESSED
             //  create a new item, rounding the numbers and setting the status
             let newitem: Item = {
               link: `https://www.bricklink.com/v2/inventory_detail.page?invID=${String(part.inventory_id)}#/pg=1&viewpg=Y`,
               name: `${part.item.name} (${part.item.no}) (${part.color_name})`,
               price_now: Number(part.unit_price),
               price_avg: Number(res.data.data.avg_price),
-              price_new: roundNumber(res.data.data.avg_price),
+              price_new: String(roundNumber(res.data.data.avg_price)),
+              price_new_initial: roundNumber(res.data.data.avg_price),
               id: part.inventory_id,
-              status: roundNumber(part.unit_price) === roundNumber(res.data.data.avg_price) ? STATUS.SKIP_EQUAL :
-                roundNumber(res.data.data.avg_price) === 0 ? STATUS.SKIP_ZERO : STATUS.NOT_PROCESSED,
+              status: status,
+              status_initial: status,
             }
             // add to the list of items
             setItems(items => items.concat(newitem))
@@ -278,11 +283,11 @@ const Home: NextPage = () => {
           setCalls(currentCalls)
         })
       }
+      setLoading(false)
     }).catch((err) => {
       // request failed to get inventory data
       setLoading(false)
     })
-    setLoading(false)
   }
 
   const circle_notch = (
@@ -296,7 +301,6 @@ const Home: NextPage = () => {
       <path d="M500.3 443.7l-119.7-119.7c27.22-40.41 40.65-90.9 33.46-144.7C401.8 87.79 326.8 13.32 235.2 1.723C99.01-15.51-15.51 99.01 1.724 235.2c11.6 91.64 86.08 166.7 177.6 178.9c53.8 7.189 104.3-6.236 144.7-33.46l119.7 119.7c15.62 15.62 40.95 15.62 56.57 0C515.9 484.7 515.9 459.3 500.3 443.7zM79.1 208c0-70.58 57.42-128 128-128s128 57.42 128 128c0 70.58-57.42 128-128 128S79.1 278.6 79.1 208z" />
     </svg>
   )
-
   const globe = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className='w-4 h-4 fill-white' >
       <path d="M352 256C352 278.2 350.8 299.6 348.7 320H163.3C161.2 299.6 159.1 278.2 159.1 256C159.1 233.8 161.2 212.4 163.3 192H348.7C350.8 212.4 352 233.8 352 256zM503.9 192C509.2 212.5 512 233.9 512 256C512 278.1 509.2 299.5 503.9 320H380.8C382.9 299.4 384 277.1 384 256C384 234 382.9 212.6 380.8 192H503.9zM493.4 160H376.7C366.7 96.14 346.9 42.62 321.4 8.442C399.8 29.09 463.4 85.94 493.4 160zM344.3 160H167.7C173.8 123.6 183.2 91.38 194.7 65.35C205.2 41.74 216.9 24.61 228.2 13.81C239.4 3.178 248.7 0 256 0C263.3 0 272.6 3.178 283.8 13.81C295.1 24.61 306.8 41.74 317.3 65.35C328.8 91.38 338.2 123.6 344.3 160H344.3zM18.61 160C48.59 85.94 112.2 29.09 190.6 8.442C165.1 42.62 145.3 96.14 135.3 160H18.61zM131.2 192C129.1 212.6 127.1 234 127.1 256C127.1 277.1 129.1 299.4 131.2 320H8.065C2.8 299.5 0 278.1 0 256C0 233.9 2.8 212.5 8.065 192H131.2zM194.7 446.6C183.2 420.6 173.8 388.4 167.7 352H344.3C338.2 388.4 328.8 420.6 317.3 446.6C306.8 470.3 295.1 487.4 283.8 498.2C272.6 508.8 263.3 512 255.1 512C248.7 512 239.4 508.8 228.2 498.2C216.9 487.4 205.2 470.3 194.7 446.6H194.7zM190.6 503.6C112.2 482.9 48.59 426.1 18.61 352H135.3C145.3 415.9 165.1 469.4 190.6 503.6V503.6zM321.4 503.6C346.9 469.4 366.7 415.9 376.7 352H493.4C463.4 426.1 399.8 482.9 321.4 503.6V503.6z" />
@@ -307,19 +311,16 @@ const Home: NextPage = () => {
       <path d="M361 215C375.3 223.8 384 239.3 384 256C384 272.7 375.3 288.2 361 296.1L73.03 472.1C58.21 482 39.66 482.4 24.52 473.9C9.377 465.4 0 449.4 0 432V80C0 62.64 9.377 46.63 24.52 38.13C39.66 29.64 58.21 29.99 73.03 39.04L361 215z" />
     </svg>
   )
-
   const check = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512" className='w-6 h-6 fill-green-600'><path d="M438.6 105.4C451.1 117.9 451.1 138.1 438.6 150.6L182.6 406.6C170.1 419.1 149.9 419.1 137.4 406.6L9.372 278.6C-3.124 266.1-3.124 245.9 9.372 233.4C21.87 220.9 42.13 220.9 54.63 233.4L159.1 338.7L393.4 105.4C405.9 92.88 426.1 92.88 438.6 105.4H438.6z" /></svg>
   )
   const checkWhite = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512" className='w-6 h-6 fill-white'><path d="M438.6 105.4C451.1 117.9 451.1 138.1 438.6 150.6L182.6 406.6C170.1 419.1 149.9 419.1 137.4 406.6L9.372 278.6C-3.124 266.1-3.124 245.9 9.372 233.4C21.87 220.9 42.13 220.9 54.63 233.4L159.1 338.7L393.4 105.4C405.9 92.88 426.1 92.88 438.6 105.4H438.6z" /></svg>
   )
-
   const cog = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className='w-6 h-6 fill-sky-700 hover:sky-900'>
       <path d="M495.9 166.6C499.2 175.2 496.4 184.9 489.6 191.2L446.3 230.6C447.4 238.9 448 247.4 448 256C448 264.6 447.4 273.1 446.3 281.4L489.6 320.8C496.4 327.1 499.2 336.8 495.9 345.4C491.5 357.3 486.2 368.8 480.2 379.7L475.5 387.8C468.9 398.8 461.5 409.2 453.4 419.1C447.4 426.2 437.7 428.7 428.9 425.9L373.2 408.1C359.8 418.4 344.1 427 329.2 433.6L316.7 490.7C314.7 499.7 307.7 506.1 298.5 508.5C284.7 510.8 270.5 512 255.1 512C241.5 512 227.3 510.8 213.5 508.5C204.3 506.1 197.3 499.7 195.3 490.7L182.8 433.6C167 427 152.2 418.4 138.8 408.1L83.14 425.9C74.3 428.7 64.55 426.2 58.63 419.1C50.52 409.2 43.12 398.8 36.52 387.8L31.84 379.7C25.77 368.8 20.49 357.3 16.06 345.4C12.82 336.8 15.55 327.1 22.41 320.8L65.67 281.4C64.57 273.1 64 264.6 64 256C64 247.4 64.57 238.9 65.67 230.6L22.41 191.2C15.55 184.9 12.82 175.3 16.06 166.6C20.49 154.7 25.78 143.2 31.84 132.3L36.51 124.2C43.12 113.2 50.52 102.8 58.63 92.95C64.55 85.8 74.3 83.32 83.14 86.14L138.8 103.9C152.2 93.56 167 84.96 182.8 78.43L195.3 21.33C197.3 12.25 204.3 5.04 213.5 3.51C227.3 1.201 241.5 0 256 0C270.5 0 284.7 1.201 298.5 3.51C307.7 5.04 314.7 12.25 316.7 21.33L329.2 78.43C344.1 84.96 359.8 93.56 373.2 103.9L428.9 86.14C437.7 83.32 447.4 85.8 453.4 92.95C461.5 102.8 468.9 113.2 475.5 124.2L480.2 132.3C486.2 143.2 491.5 154.7 495.9 166.6V166.6zM256 336C300.2 336 336 300.2 336 255.1C336 211.8 300.2 175.1 256 175.1C211.8 175.1 176 211.8 176 255.1C176 300.2 211.8 336 256 336z" /></svg>
   )
-
   const xmark = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" className='w-6 h-6 fill-white' ><path d="M310.6 361.4c12.5 12.5 12.5 32.75 0 45.25C304.4 412.9 296.2 416 288 416s-16.38-3.125-22.62-9.375L160 301.3L54.63 406.6C48.38 412.9 40.19 416 32 416S15.63 412.9 9.375 406.6c-12.5-12.5-12.5-32.75 0-45.25l105.4-105.4L9.375 150.6c-12.5-12.5-12.5-32.75 0-45.25s32.75-12.5 45.25 0L160 210.8l105.4-105.4c12.5-12.5 32.75-12.5 45.25 0s12.5 32.75 0 45.25l-105.4 105.4L310.6 361.4z" /></svg>
   )
@@ -328,31 +329,26 @@ const Home: NextPage = () => {
       <path d="M52.51 440.6l171.5-142.9V214.3L52.51 71.41C31.88 54.28 0 68.66 0 96.03v319.9C0 443.3 31.88 457.7 52.51 440.6zM308.5 440.6l192-159.1c15.25-12.87 15.25-36.37 0-49.24l-192-159.1c-20.63-17.12-52.51-2.749-52.51 24.62v319.9C256 443.3 287.9 457.7 308.5 440.6z" />
     </svg>
   )
-
   const equal = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512" className='w-6 h-6 fill-white'>
       <path d="M48 192h352c17.69 0 32-14.32 32-32s-14.31-31.1-32-31.1h-352c-17.69 0-32 14.31-32 31.1S30.31 192 48 192zM400 320h-352c-17.69 0-32 14.31-32 31.1s14.31 32 32 32h352c17.69 0 32-14.32 32-32S417.7 320 400 320z" />
     </svg>
   )
-
   const error = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className='w-6 h-6 fill-white' >
       <path d="M506.3 417l-213.3-364c-16.33-28-57.54-28-73.98 0l-213.2 364C-10.59 444.9 9.849 480 42.74 480h426.6C502.1 480 522.6 445 506.3 417zM232 168c0-13.25 10.75-24 24-24S280 154.8 280 168v128c0 13.25-10.75 24-23.1 24S232 309.3 232 296V168zM256 416c-17.36 0-31.44-14.08-31.44-31.44c0-17.36 14.07-31.44 31.44-31.44s31.44 14.08 31.44 31.44C287.4 401.9 273.4 416 256 416z" />
     </svg>
   )
-
   const hourglass_empty = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512" className='w-6 h-6 fill-white'  >
       <path d="M0 32C0 14.33 14.33 0 32 0H352C369.7 0 384 14.33 384 32C384 49.67 369.7 64 352 64V74.98C352 117.4 335.1 158.1 305.1 188.1L237.3 256L305.1 323.9C335.1 353.9 352 394.6 352 437V448C369.7 448 384 462.3 384 480C384 497.7 369.7 512 352 512H32C14.33 512 0 497.7 0 480C0 462.3 14.33 448 32 448V437C32 394.6 48.86 353.9 78.86 323.9L146.7 256L78.86 188.1C48.86 158.1 32 117.4 32 74.98V64C14.33 64 0 49.67 0 32zM96 64V74.98C96 100.4 106.1 124.9 124.1 142.9L192 210.7L259.9 142.9C277.9 124.9 288 100.4 288 74.98V64H96zM96 448H288V437C288 411.6 277.9 387.1 259.9 369.1L192 301.3L124.1 369.1C106.1 387.1 96 411.6 96 437V448z" />
     </svg>
   )
-
   const zero = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" className='w-6 h-6 fill-white'>
       <path d="M160 32.01c-88.37 0-160 71.63-160 160v127.1c0 88.37 71.63 160 160 160s160-71.63 160-160V192C320 103.6 248.4 32.01 160 32.01zM256 320c0 52.93-43.06 96-96 96c-52.93 0-96-43.07-96-96V192c0-52.94 43.07-96 96-96c52.94 0 96 43.06 96 96V320z" />
     </svg>
   )
-
   const refresh = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className='w-6 h-6 fill-sky-600'>
       <path d="M464 16c-17.67 0-32 14.31-32 32v74.09C392.1 66.52 327.4 32 256 32C161.5 32 78.59 92.34 49.58 182.2c-5.438 16.81 3.797 34.88 20.61 40.28c16.89 5.5 34.88-3.812 40.3-20.59C130.9 138.5 189.4 96 256 96c50.5 0 96.26 24.55 124.4 64H336c-17.67 0-32 14.31-32 32s14.33 32 32 32h128c17.67 0 32-14.31 32-32V48C496 30.31 481.7 16 464 16zM441.8 289.6c-16.92-5.438-34.88 3.812-40.3 20.59C381.1 373.5 322.6 416 256 416c-50.5 0-96.25-24.55-124.4-64H176c17.67 0 32-14.31 32-32s-14.33-32-32-32h-128c-17.67 0-32 14.31-32 32v144c0 17.69 14.33 32 32 32s32-14.31 32-32v-74.09C119.9 445.5 184.6 480 255.1 480c94.45 0 177.4-60.34 206.4-150.2C467.9 313 458.6 294.1 441.8 289.6z" />\
@@ -361,6 +357,11 @@ const Home: NextPage = () => {
   const refreshWhite = (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className='w-6 h-6 fill-white'>
       <path d="M464 16c-17.67 0-32 14.31-32 32v74.09C392.1 66.52 327.4 32 256 32C161.5 32 78.59 92.34 49.58 182.2c-5.438 16.81 3.797 34.88 20.61 40.28c16.89 5.5 34.88-3.812 40.3-20.59C130.9 138.5 189.4 96 256 96c50.5 0 96.26 24.55 124.4 64H336c-17.67 0-32 14.31-32 32s14.33 32 32 32h128c17.67 0 32-14.31 32-32V48C496 30.31 481.7 16 464 16zM441.8 289.6c-16.92-5.438-34.88 3.812-40.3 20.59C381.1 373.5 322.6 416 256 416c-50.5 0-96.25-24.55-124.4-64H176c17.67 0 32-14.31 32-32s-14.33-32-32-32h-128c-17.67 0-32 14.31-32 32v144c0 17.69 14.33 32 32 32s32-14.31 32-32v-74.09C119.9 445.5 184.6 480 255.1 480c94.45 0 177.4-60.34 206.4-150.2C467.9 313 458.6 294.1 441.8 289.6z" />\
+    </svg>
+  )
+  const edit = (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className='w-6 h-6 fill-white'>
+      <path d="M362.7 19.32C387.7-5.678 428.3-5.678 453.3 19.32L492.7 58.75C517.7 83.74 517.7 124.3 492.7 149.3L444.3 197.7L314.3 67.72L362.7 19.32zM421.7 220.3L188.5 453.4C178.1 463.8 165.2 471.5 151.1 475.6L30.77 511C22.35 513.5 13.24 511.2 7.03 504.1C.8198 498.8-1.502 489.7 .976 481.2L36.37 360.9C40.53 346.8 48.16 333.9 58.57 323.5L291.7 90.34L421.7 220.3z"/>
     </svg>
   )
 
@@ -401,6 +402,11 @@ const Home: NextPage = () => {
         className = "bg-sky-600 hover:bg-red-600"
         clickable = true
         break;
+      case STATUS.EDITED:
+          svg = edit
+          className = "bg-green-600 hover:bg-gray-600"
+          clickable = true
+          break;
     }
     return <button onClick={() => {
       if (clickable && onClickCallBack) {
@@ -607,7 +613,7 @@ const Home: NextPage = () => {
             `} key={id}>
                   <td className='pl-3 py-0.5'>
                     {getSVGbasedOnStatus(item.status, () => {
-                      console.log("clickin' ", item.id, " ", item.status)
+
                       if (item.status === STATUS.NOT_PROCESSED) {
                         setItems(items.map(_item => {
                           if (_item.id === item.id) {
@@ -622,7 +628,9 @@ const Home: NextPage = () => {
                           }
                           return _item
                         }))
-                      } else if (item.status === STATUS.ERROR) {
+                      } else
+
+                      if (item.status === STATUS.ERROR) {
                         setItems(items.map(_item => {
                           if (_item.id === item.id) {
                             _item.status = STATUS.RETRY
@@ -636,13 +644,41 @@ const Home: NextPage = () => {
                           }
                           return _item
                         }))
+                      } else
+
+                      if (item.status === STATUS.EDITED) {
+                        setItems(items.map(_item => {
+                          if (_item.id === item.id) {
+                            _item.status = _item.status_initial
+                            _item.price_new = String(_item.price_new_initial)
+                          }
+                          return _item
+                        }))
                       }
                     })}
                   </td>
                   <td className='px-4 border-x-2 py-0.5 text-sky-800 underline hover:text-sky-600'> <a target="_blank" href={item.link} rel="noreferrer">{item.name}</a></td>
                   <td className='px-4 border-x-2 py-0.5'>{item.price_now}</td>
                   <td className='px-4 border-x-2 py-0.5'>{item.price_avg}</td>
-                  <td className='px-4 border-x-2 py-0.5'>{item.price_new}</td>
+                  <td className='px-4 border-x-2 py-0.5'>
+                    <div>
+                      <input type="text" lang="en" min="0" step="0.01" className='rounded-lg border-2 text-lg pl-1 w-24' value={item.price_new} onChange={(e)=>{
+                        setItems(
+                          items.map(_item=>{
+                            if(_item.id === item.id){
+                              _item.price_new = String(e.target.value.replace(",","."))
+                              if(Number(_item.price_new) === _item.price_new_initial){
+                                _item.status = _item.status_initial
+                              }else{
+                              _item.status = STATUS.EDITED
+                              }
+                            }
+                            return _item
+                          })
+                        )
+                      }} />
+                    </div>
+                  </td>
                 </tr>)
             }
           </tbody>
