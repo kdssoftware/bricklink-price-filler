@@ -191,7 +191,7 @@ const Home: NextPage = () => {
     setLoading(true)
 
     axios.post("/api/bl", {
-      link: "https://api.bricklink.com/api/store/v1/inventories?item_type=PART",
+      link: "https://api.bricklink.com/api/store/v1/inventories?",
       method: "GET"
     }).then(async (res) => {
       //increase calls
@@ -200,13 +200,24 @@ const Home: NextPage = () => {
 
       //get the U/N based on the option selectedd
       let new_or_used_filter: string
+      let item_type: string
       switch (fetchType) {
+        case "NEW_MINIFIGS":
+          new_or_used_filter = "N"
+          item_type="MINIFIG"
+          break;
+        case "OLD_MINIFIGS":
+          new_or_used_filter = "U"
+          item_type="MINIFIG"
+          break;
         case "OLD_PARTS":
           new_or_used_filter = "U"
+          item_type = "PART"
           break;
         case "NEW_PARTS":
         default:
           new_or_used_filter = "N"
+          item_type = "PART"
       }
 
       // get parts
@@ -214,7 +225,7 @@ const Home: NextPage = () => {
       // filter parts, only having parts that are not in SID of the user
       parts = parts.filter(p => SID.indexOf(p.inventory_id) === -1)
       // filter parts based on N/U
-      parts = parts.filter(part => part.new_or_used === new_or_used_filter);
+      parts = parts.filter(part => part.new_or_used === new_or_used_filter && part.item.type === item_type);
       // create a backup of parts, before filtering the SID on it
       let parts_backup = parts
       // filter parts based on available SID
@@ -470,6 +481,8 @@ const Home: NextPage = () => {
         }} className='p-2 border-2 border-gray-400 rounded-lg m-2 bg-sky-100 ' name="" id="" disabled={started}>
           <option value="NEW_PARTS">New Parts</option>
           <option value="OLD_PARTS">Old Parts</option>
+          <option value="NEW_MINIFIGS">New Minifigs</option>
+          <option value="OLD_MINIFIGS">Old Minifigs</option>
         </select>
         {
           !started &&
