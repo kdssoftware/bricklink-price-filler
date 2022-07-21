@@ -191,7 +191,7 @@ const Home: NextPage = () => {
     setLoading(true)
 
     axios.post("/api/bl", {
-      link: "https://api.bricklink.com/api/store/v1/inventories?",
+      link: "https://api.bricklink.com/api/store/v1/inventories",
       method: "GET"
     }).then(async (res) => {
       //increase calls
@@ -259,7 +259,7 @@ const Home: NextPage = () => {
 
         // get the price of the item
         await axios.post("/api/bl", {
-          link: `https://api.bricklink.com/api/store/v1/items/part/${part.item.no}/price?guide_type=sold&new_or_used=${part.new_or_used}&vat=Y&color_id=${part.color_id}`,
+          link: `https://api.bricklink.com/api/store/v1/items/${item_type.toLowerCase()}/${part.item.no}/price?guide_type=sold&new_or_used=${part.new_or_used}&vat=Y&color_id=${part.color_id}`,
           method: "GET"
         }).then(async (res) => {
           // update call amount
