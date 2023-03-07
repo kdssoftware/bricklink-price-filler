@@ -173,7 +173,7 @@ const Home: NextPage = () => {
 
   // rounds a number down
   const roundNumber = (num: number | string): number => {
-    return Number(String(num).match(/\d+\.\d\d/)![0])
+    return Number(String(num).match(/\d+\.\d\d\d/)![0])
   }
 
   const fetchitems = () => {
