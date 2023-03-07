@@ -110,7 +110,7 @@ const Home: NextPage = () => {
           link: `https://api.bricklink.com/api/store/v1/inventories/${item.id}`,
           method: "PUT",
           body: {
-            unit_price: Number(item.price_new).toFixed(2)
+            unit_price: Number(item.price_new).toFixed(3)
           }
         }).then((res) => {
           currentCalls++
