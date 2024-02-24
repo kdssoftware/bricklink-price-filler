@@ -201,23 +201,49 @@ const Home: NextPage = () => {
       //get the U/N based on the option selectedd
       let new_or_used_filter: string
       let item_type: string
+      let cur_or_6: string
       switch (fetchType) {
-        case "NEW_MINIFIGS":
+        case "CUR_NEW_MINIFIGS":
           new_or_used_filter = "N"
           item_type="MINIFIG"
+          cur_or_6="stock"
           break;
-        case "OLD_MINIFIGS":
+        case "CUR_OLD_MINIFIGS":
           new_or_used_filter = "U"
           item_type="MINIFIG"
+          cur_or_6="stock"
           break;
-        case "OLD_PARTS":
+        case "CUR_OLD_PARTS":
           new_or_used_filter = "U"
           item_type = "PART"
+          cur_or_6="stock"
           break;
-        case "NEW_PARTS":
+        case "CUR_NEW_PARTS":
+          new_or_used_filter = "U"
+          item_type = "PART"
+          cur_or_6="stock"
+          break;
+
+        case "6_NEW_MINIFIGS":
+          new_or_used_filter = "N"
+          item_type="MINIFIG"
+          cur_or_6="sold"
+          break;
+        case "6_OLD_MINIFIGS":
+          new_or_used_filter = "U"
+          item_type="MINIFIG"
+          cur_or_6="sold"
+          break;
+        case "6_OLD_PARTS":
+          new_or_used_filter = "U"
+          item_type = "PART"
+          cur_or_6="sold"
+          break;
+        case "6_NEW_PARTS":
         default:
           new_or_used_filter = "N"
           item_type = "PART"
+          cur_or_6="sold"
       }
 
       // get parts
@@ -259,7 +285,7 @@ const Home: NextPage = () => {
 
         // get the price of the item
         await axios.post("/api/bl", {
-          link: `https://api.bricklink.com/api/store/v1/items/${item_type.toLowerCase()}/${part.item.no}/price?guide_type=sold&new_or_used=${part.new_or_used}&vat=Y&color_id=${part.color_id}`,
+          link: `https://api.bricklink.com/api/store/v1/items/${item_type.toLowerCase()}/${part.item.no}/price?guide_type=${cur_or_6}&new_or_used=${part.new_or_used}&vat=Y&color_id=${part.color_id}`,
           method: "GET"
         }).then(async (res) => {
           // update call amount
@@ -479,10 +505,14 @@ const Home: NextPage = () => {
         <select onChange={(e) => {
           setFetchType(e.target.value)
         }} className='p-2 border-2 border-gray-400 rounded-lg m-2 bg-sky-100 ' name="" id="" disabled={started}>
-          <option value="NEW_PARTS">New Parts</option>
-          <option value="OLD_PARTS">Old Parts</option>
-          <option value="NEW_MINIFIGS">New Minifigs</option>
-          <option value="OLD_MINIFIGS">Old Minifigs</option>
+          <option value="CUR_NEW_PARTS">New Parts (current)</option>
+          <option value="6_NEW_PARTS">New Parts (6m avg)</option>
+          <option value="CUR_OLD_PARTS">Old Parts (current)</option>
+          <option value="6_OLD_PARTS">Old Parts (6m avg) </option>
+          <option value="CUR_NEW_MINIFIGS">New Minifigs (current) </option>
+          <option value="6_NEW_MINIFIGS">New Minifigs (6m avg)</option>
+          <option value="CUR_OLD_MINIFIGS">Old Minifigs (current)</option>
+          <option value="6_OLD_MINIFIGS">Old Minifigs (6m avg)</option>
         </select>
         {
           !started &&
